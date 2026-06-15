@@ -1,0 +1,15 @@
+# Xcode build output
+Builds/MacOSX/build/
+Builds/MacOSX/*.xcuserdata
+Builds/MacOSX/Tideline.xcodeproj/xcuserdata/
+Builds/MacOSX/Tideline.xcodeproj/project.xcworkspace/xcuserdata/
+
+# macOS
+.DS_Store
+
+# JUCE generated (can be regenerated via Projucer --resave)
+JuceLibraryCode/
+
+# IDE
+*.xccheckout
+*.xcscmblueprint
