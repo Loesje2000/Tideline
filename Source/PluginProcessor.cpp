@@ -19,18 +19,19 @@ TidelineAudioProcessor::createParameterLayout()
         PID{"mode", 1}, "Mode",
         juce::StringArray{"Streaming", "Vinyl"}, 0));
 
-    // Order must match TideDial platform list:
-    // 0=Spotify Normal, 1=Apple Music, 2=YouTube Video, 3=TIDAL,
-    // 4=Spotify Quiet, 5=Spotify Loud, 6=YouTube Music
+    // Platform indices are deliberately stable: sessions store this choice.
     params.push_back(std::make_unique<juce::AudioParameterChoice>(
         PID{"active_platform", 1}, "Active Platform",
         juce::StringArray{
             "Spotify Normal", "Apple Music", "YouTube Video", "TIDAL",
-            "Spotify Quiet", "Spotify Loud", "YouTube Music"
+            "Spotify Quiet", "Spotify Loud", "YouTube Music", "Amazon Music", "Pandora", "Deezer"
         }, 0));
 
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         PID{"preview", 1}, "Preview", false));
+
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        PID{"auto_gain", 1}, "Auto Gain", false));
 
     return { params.begin(), params.end() };
 }
@@ -44,6 +45,9 @@ void TidelineAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     rmsAlpha = 1.0f - std::exp(-1.0f / (float)(sampleRate * 2.0));
     rmsSmooth = 0.0f;
     previewGainSmoothed = 1.0f;
+    previewGainDB = 0.0f;
+    previewWasEnabled = false;
+    previewPlatform = -1;
 }
 
 void TidelineAudioProcessor::releaseResources()
@@ -99,16 +103,64 @@ float TidelineAudioProcessor::getCrestFactorDB() const
     return peak - rmsDB;
 }
 
+float TidelineAudioProcessor::getPlatformGainDB (int platformIndex) const
+{
+    return calculatePlatformGainDB (platformIndex, lufsEngine.getIntegratedLUFS(),
+                                    lufsEngine.getTruePeakDB());
+}
+
+float TidelineAudioProcessor::calculatePlatformGainDB (int platformIndex, float integrated,
+                                                        float truePeak) const
+{
+    if (integrated <= -69.0f)
+        return 0.0f;
+
+    struct ServiceRule { float target; bool boostsQuietAudio; bool peakSafeBoost; };
+    // LP2 guide: YouTube, TIDAL, Amazon and Deezer do not raise quiet tracks.
+    // Spotify Normal/Quiet constrain boosts to -1 dBTP; Loud uses a limiter.
+    static constexpr ServiceRule rules[] = {
+        { -14.0f, true,  true  }, // Spotify Normal
+        { -16.0f, true,  true  }, // Apple Music: conservative peak-safe approximation
+        { -14.0f, false, false }, // YouTube Video
+        { -14.0f, false, false }, // TIDAL
+        { -19.0f, true,  true  }, // Spotify Quiet
+        { -11.0f, true,  false }, // Spotify Loud (limiter handled in preview)
+        {  -7.0f, false, false }, // YouTube Music
+        { -14.0f, false, false }, // Amazon Music
+        { -14.0f, true,  true  }, // Pandora: avoid an unsafe boost in Tideline preview
+        { -15.0f, false, false }  // Deezer
+    };
+
+    const auto& rule = rules[juce::jlimit (0, 9, platformIndex)];
+    float gainDB = rule.target - integrated;
+
+    if (gainDB > 0.0f && ! rule.boostsQuietAudio)
+        return 0.0f;
+
+    if (gainDB > 0.0f && rule.peakSafeBoost && truePeak > -144.0f)
+        gainDB = juce::jmin (gainDB, -1.0f - truePeak);
+
+    return juce::jlimit (-60.0f, 24.0f, gainDB);
+}
+
+void TidelineAudioProcessor::refreshPreviewGain (int platformIndex)
+{
+    previewGainDB = getPlatformGainDB (platformIndex);
+}
+
 void TidelineAudioProcessor::applyPreviewGain(juce::AudioBuffer<float>& buffer)
 {
     auto* previewParam   = apvts.getRawParameterValue("preview");
     auto* platformParam  = apvts.getRawParameterValue("active_platform");
+    auto* autoGainParam  = apvts.getRawParameterValue("auto_gain");
 
-    if (previewParam == nullptr || platformParam == nullptr) return;
+    if (previewParam == nullptr || platformParam == nullptr || autoGainParam == nullptr) return;
 
     bool previewOn = (*previewParam > 0.5f);
     if (!previewOn)
     {
+        previewWasEnabled = false;
+        previewPlatform = -1;
         // Ramp gain back to unity
         previewGainSmoothed += (1.0f - previewGainSmoothed) * 0.1f;
         if (std::abs(previewGainSmoothed - 1.0f) < 0.001f) previewGainSmoothed = 1.0f;
@@ -117,18 +169,16 @@ void TidelineAudioProcessor::applyPreviewGain(juce::AudioBuffer<float>& buffer)
         return;
     }
 
-    float integrated = lufsEngine.getIntegratedLUFS();
-    if (integrated <= -69.0f) return; // no measurement yet
+    const int idx = juce::jlimit (0, 9, juce::roundToInt (platformParam->load()));
+    const bool autoGain = (*autoGainParam > 0.5f);
+    if (! previewWasEnabled || autoGain || previewPlatform != idx)
+    {
+        refreshPreviewGain (idx);
+        previewPlatform = idx;
+    }
+    previewWasEnabled = true;
 
-    // Platform target LUFS values — order matches AudioParameterChoice above
-    // 0=Spotify Normal, 1=Apple Music, 2=YouTube Video, 3=TIDAL,
-    // 4=Spotify Quiet, 5=Spotify Loud, 6=YouTube Music
-    const float targets[] = { -14.0f, -16.0f, -14.0f, -14.0f, -19.0f, -11.0f, -7.0f };
-    int idx = juce::jlimit(0, 6, juce::roundToInt(platformParam->load()));
-    float targetLufs = targets[idx];
-
-    float gainDB = targetLufs - integrated;
-    float targetGain = juce::Decibels::decibelsToGain(juce::jlimit(-24.0f, 24.0f, gainDB));
+    float targetGain = juce::Decibels::decibelsToGain (previewGainDB);
 
     // Smooth the gain change
     float prevGain = previewGainSmoothed;

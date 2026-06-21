@@ -16,6 +16,7 @@ public:
     void paint(juce::Graphics&) override;
     void resized() override;
     void timerCallback() override;
+    void mouseDown(const juce::MouseEvent&) override;
 
     // FileDragAndDropTarget
     bool isInterestedInFileDrag(const juce::StringArray& files) override;
@@ -39,6 +40,9 @@ private:
 
     // File player transport bar
     juce::TextButton  playStopBtn  { "Play" };
+    juce::TextButton  previousBtn  { "<" };
+    juce::TextButton  nextBtn      { ">" };
+    juce::TextButton  analyseAlbumBtn { "Analyse Album" };
     juce::TextButton  ejectBtn     { "Eject" };
     juce::Label       fileNameLabel;
     juce::Slider      progressSlider;
@@ -52,6 +56,9 @@ private:
     float gainCueAlpha = 0.0f;
 
     void drawBackground(juce::Graphics& g);
+    void drawStreamingOverview(juce::Graphics& g, juce::Rectangle<float> bounds);
+    void drawLoudnessBlock(juce::Graphics& g, juce::Rectangle<float> bounds);
+    void drawAlbumSummary(juce::Graphics& g);
     void drawDropOverlay(juce::Graphics& g);
     void drawFileBar(juce::Graphics& g);
     void updateModeButtons();

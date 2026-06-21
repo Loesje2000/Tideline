@@ -103,9 +103,10 @@ public:
                     }
                 }
             }
-            // Slow decay hold
+            // Max true peak for the current measurement. A decay would under-report
+            // the peak used to decide whether a streaming service may boost audio.
             float prev = truePeak.load(std::memory_order_relaxed);
-            truePeak.store(juce::jmax(prev * 0.99999f, tp), std::memory_order_relaxed);
+            truePeak.store(juce::jmax(prev, tp), std::memory_order_relaxed);
         }
 
         // K-weight and accumulate into 10ms sub-blocks

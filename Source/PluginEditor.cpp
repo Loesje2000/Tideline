@@ -63,6 +63,20 @@ TidelineAudioProcessorEditor::TidelineAudioProcessorEditor(TidelineAudioProcesso
         }
     };
 
+    addAndMakeVisible(previousBtn);
+    previousBtn.onClick = [this]
+    {
+        if (processor.filePlayer.previousFile()) { processor.requestReset(); processor.filePlayer.play(); }
+    };
+    addAndMakeVisible(nextBtn);
+    nextBtn.onClick = [this]
+    {
+        if (processor.filePlayer.nextFile()) { processor.requestReset(); processor.filePlayer.play(); }
+    };
+
+    addAndMakeVisible(analyseAlbumBtn);
+    analyseAlbumBtn.onClick = [this] { processor.filePlayer.analyseAlbumAsync(); };
+
     // Eject
     addAndMakeVisible(ejectBtn);
     ejectBtn.onClick = [this]
@@ -125,6 +139,7 @@ void TidelineAudioProcessorEditor::timerCallback()
 
     // Update file transport UI
     updateFileTransportUI();
+    if (processor.filePlayer.isAnalysingAlbum() || !processor.filePlayer.getAlbumResults().empty()) repaint();
 
     // Preview gain-change cue
     if (previewBtn.getToggleState())
@@ -144,6 +159,9 @@ void TidelineAudioProcessorEditor::updateFileTransportUI()
     bool hasFile = fp.hasFile();
 
     playStopBtn.setVisible(hasFile);
+    previousBtn.setVisible(hasFile && fp.getPlaylistSize() > 1);
+    nextBtn.setVisible(hasFile && fp.getPlaylistSize() > 1);
+    analyseAlbumBtn.setVisible(hasFile && fp.getPlaylistSize() > 1);
     ejectBtn.setVisible(hasFile);
     progressSlider.setVisible(hasFile);
     fileNameLabel.setVisible(hasFile);
@@ -156,7 +174,14 @@ void TidelineAudioProcessorEditor::updateFileTransportUI()
     }
 
     playStopBtn.setButtonText(fp.isPlaying() ? "Pause" : "Play");
-    fileNameLabel.setText(fp.getFileName(), juce::dontSendNotification);
+    juce::String name = fp.getFileName();
+    if (fp.getPlaylistSize() > 1)
+        name = juce::String(fp.getPlaylistIndex() + 1) + "/" + juce::String(fp.getPlaylistSize()) + "  " + name;
+    fileNameLabel.setText(name, juce::dontSendNotification);
+    previousBtn.setEnabled(fp.hasPreviousFile());
+    nextBtn.setEnabled(fp.hasNextFile());
+    analyseAlbumBtn.setEnabled(!fp.isAnalysingAlbum());
+    analyseAlbumBtn.setButtonText(fp.isAnalysingAlbum() ? "Analysing..." : "Analyse Album");
 
     double len = fp.getLengthSeconds();
     if (len > 0.0)
@@ -181,6 +206,16 @@ void TidelineAudioProcessorEditor::paint(juce::Graphics& g)
     g.setFont(juce::FontOptions(10.0f, juce::Font::plain));
     g.drawText("Tideline", juce::Rectangle<float>(12.0f, 26.0f, 90.0f, 13.0f),
                juce::Justification::centredLeft, false);
+
+    if (!vinylMode)
+    {
+        auto overview = juce::Rectangle<float>(104.0f, 45.0f, (float)getWidth() - 208.0f, 92.0f);
+        auto block = juce::Rectangle<float>((float)getWidth() * 0.22f, 148.0f,
+                                             (float)getWidth() * 0.56f, 170.0f);
+        drawStreamingOverview(g, overview);
+        drawLoudnessBlock(g, block);
+        drawAlbumSummary(g);
+    }
 
     // Numeric readouts
     {
@@ -255,6 +290,131 @@ void TidelineAudioProcessorEditor::drawBackground(juce::Graphics& g)
     g.fillRect(getLocalBounds());
 }
 
+void TidelineAudioProcessorEditor::drawStreamingOverview(juce::Graphics& g,
+                                                           juce::Rectangle<float> bounds)
+{
+    static const juce::StringArray labels {
+        "Spotify\nNormal", "Apple\nMusic", "YouTube\nVideo", "TIDAL", "Spotify\nQuiet",
+        "Spotify\nLoud", "YouTube\nMusic", "Amazon\nMusic", "Pandora", "Deezer"
+    };
+
+    const auto* platform = processor.apvts.getRawParameterValue("active_platform");
+    const int active = platform != nullptr ? juce::roundToInt(platform->load()) : 0;
+    const bool waiting = processor.lufsEngine.getIntegratedLUFS() <= -69.0f;
+    const float gap = 5.0f;
+    const float cellW = (bounds.getWidth() - 4.0f * gap) / 5.0f;
+    const float cellH = (bounds.getHeight() - gap) * 0.5f;
+
+    for (int i = 0; i < labels.size(); ++i)
+    {
+        const int row = i / 5, col = i % 5;
+        auto cell = juce::Rectangle<float>(bounds.getX() + col * (cellW + gap),
+                                           bounds.getY() + row * (cellH + gap), cellW, cellH);
+        const bool selected = i == active;
+        g.setColour(juce::Colour(TidelineLookAndFeel::COL_PANEL).withAlpha(selected ? 1.0f : 0.78f));
+        g.fillRoundedRectangle(cell, 4.0f);
+        g.setColour(juce::Colour(TidelineLookAndFeel::COL_AMBER).withAlpha(selected ? 0.90f : 0.16f));
+        g.drawRoundedRectangle(cell.reduced(0.5f), 4.0f, selected ? 1.25f : 0.6f);
+
+        const float score = processor.getPlatformGainDB(i);
+        g.setColour(score < -0.3f ? juce::Colour(0xffe78354) : juce::Colour(TidelineLookAndFeel::COL_AMBER));
+        g.setFont(juce::FontOptions(13.5f, juce::Font::bold));
+        const auto scoreText = waiting ? "---" : juce::String(score >= 0.0f ? "+" : "") + juce::String(score, 1);
+        g.drawText(scoreText, cell.withTrimmedTop(3.0f).withHeight(17.0f), juce::Justification::centred, false);
+        g.setColour(juce::Colour(TidelineLookAndFeel::COL_CREAM).withAlpha(0.62f));
+        g.setFont(juce::FontOptions(7.7f, juce::Font::plain));
+        g.drawText(labels[i], cell.withTrimmedTop(21.0f).reduced(2.0f, 0.0f), juce::Justification::centred, true);
+    }
+}
+
+void TidelineAudioProcessorEditor::drawLoudnessBlock(juce::Graphics& g,
+                                                      juce::Rectangle<float> bounds)
+{
+    g.setColour(juce::Colour(TidelineLookAndFeel::COL_PANEL));
+    g.fillRoundedRectangle(bounds, 6.0f);
+    g.setColour(juce::Colour(TidelineLookAndFeel::COL_CREAM).withAlpha(0.38f));
+    g.setFont(juce::FontOptions(8.5f, juce::Font::plain));
+    const bool preview = previewBtn.getToggleState();
+    g.drawText(preview ? "NORMALIZED BLOCK" : "SOURCE BLOCK", bounds.reduced(9.0f).removeFromTop(14.0f),
+               juce::Justification::centredLeft, false);
+
+    const auto* platform = processor.apvts.getRawParameterValue("active_platform");
+    const float gain = (preview && platform != nullptr)
+        ? processor.getPlatformGainDB(juce::roundToInt(platform->load())) : 0.0f;
+    const float integrated = processor.lufsEngine.getIntegratedLUFS();
+    if (integrated <= -69.0f) return;
+
+    const float peak = processor.lufsEngine.getTruePeakDB() + gain;
+    const float lra = processor.lufsEngine.getLRA();
+    const float loudness = integrated + gain;
+    const auto yFor = [&] (float db) { return juce::jmap(juce::jlimit(-36.0f, 0.0f, db), -36.0f, 0.0f,
+                                                           bounds.getBottom() - 12.0f, bounds.getY() + 23.0f); };
+    const float peakY = yFor(peak), loudY = yFor(loudness), rangeY = yFor(loudness + lra * 0.5f);
+    auto column = bounds.withSizeKeepingCentre(bounds.getWidth() * 0.25f, bounds.getHeight() - 34.0f);
+    column.setY(bounds.getY() + 24.0f);
+    g.setColour(juce::Colour(0xffeee8d5).withAlpha(0.32f));
+    g.fillRoundedRectangle(column.getX(), rangeY, column.getWidth(), juce::jmax(4.0f, loudY - rangeY), 3.0f);
+    g.setColour(juce::Colour(TidelineLookAndFeel::COL_AMBER));
+    g.drawHorizontalLine(juce::roundToInt(peakY), column.getX(), column.getRight());
+    g.setColour(juce::Colour(0xffd85a80));
+    g.drawHorizontalLine(juce::roundToInt(loudY), column.getX(), column.getRight());
+
+    g.setColour(juce::Colour(TidelineLookAndFeel::COL_CREAM).withAlpha(0.72f));
+    g.setFont(juce::FontOptions(9.5f, juce::Font::plain));
+    g.drawText("TP  " + juce::String(peak, 1), bounds.reduced(10.0f).withY(peakY - 8.0f).withHeight(16.0f), juce::Justification::centredLeft, false);
+    g.drawText("PLR " + juce::String(peak - loudness, 1) + "   LRA " + juce::String(lra, 1),
+               bounds.reduced(10.0f).withY(loudY - 8.0f).withHeight(16.0f), juce::Justification::centredLeft, false);
+    if (preview && std::abs(gain) > 0.05f)
+    {
+        g.setColour(juce::Colour(0xffd85a80));
+        g.drawText(juce::String(gain >= 0.0f ? "+" : "") + juce::String(gain, 1) + " dB",
+                   bounds.reduced(10.0f).withY(bounds.getBottom() - 22.0f).withHeight(14.0f), juce::Justification::centredRight, false);
+    }
+}
+
+void TidelineAudioProcessorEditor::drawAlbumSummary(juce::Graphics& g)
+{
+    const auto results = processor.filePlayer.getAlbumResults();
+    const bool analysing = processor.filePlayer.isAnalysingAlbum();
+    if (results.empty() && !analysing) return;
+
+    auto box = juce::Rectangle<float>(104.0f, 323.0f, (float)getWidth() - 208.0f, 34.0f);
+    g.setColour(juce::Colour(TidelineLookAndFeel::COL_PANEL).withAlpha(0.85f));
+    g.fillRoundedRectangle(box, 4.0f);
+    g.setColour(juce::Colour(TidelineLookAndFeel::COL_CREAM).withAlpha(0.68f));
+    g.setFont(juce::FontOptions(8.8f, juce::Font::plain));
+    if (analysing)
+    {
+        g.drawText("Analysing album  " + juce::String((int)results.size()) + "/" + juce::String(processor.filePlayer.getPlaylistSize()),
+                   box.reduced(8.0f), juce::Justification::centredLeft, false);
+        return;
+    }
+
+    g.drawText("Album complete: " + juce::String((int)results.size()) + " tracks", box.reduced(8.0f),
+               juce::Justification::centredLeft, false);
+    g.setColour(juce::Colour(TidelineLookAndFeel::COL_AMBER));
+    const float tidalGain = processor.filePlayer.getTidalAlbumGainDB();
+    g.drawText("TIDAL album gain " + juce::String(tidalGain, 1) + " dB", box.reduced(8.0f),
+               juce::Justification::centredRight, false);
+}
+
+void TidelineAudioProcessorEditor::mouseDown(const juce::MouseEvent& e)
+{
+    if (vinylMode) return;
+
+    const auto area = juce::Rectangle<float>(104.0f, 45.0f, (float)getWidth() - 208.0f, 92.0f);
+    if (!area.contains(e.position)) return;
+
+    const float gap = 5.0f;
+    const float cellW = (area.getWidth() - 4.0f * gap) / 5.0f;
+    const float cellH = (area.getHeight() - gap) / 2.0f;
+    const int col = juce::jlimit(0, 4, (int)((e.position.x - area.getX()) / (cellW + gap)));
+    const int row = juce::jlimit(0, 1, (int)((e.position.y - area.getY()) / (cellH + gap)));
+    const int platform = row * 5 + col;
+    if (auto* param = processor.apvts.getParameter("active_platform"))
+        param->setValueNotifyingHost(param->convertTo0to1((float)platform));
+}
+
 void TidelineAudioProcessorEditor::drawDropOverlay(juce::Graphics& g)
 {
     g.setColour(juce::Colour(TidelineLookAndFeel::COL_AMBER).withAlpha(0.12f));
@@ -313,9 +473,12 @@ void TidelineAudioProcessorEditor::resized()
     {
         int barY = H - fileBarH;
         playStopBtn.setBounds(6, barY + 3, 44, 22);
-        ejectBtn.setBounds(54, barY + 3, 36, 22);
-        fileNameLabel.setBounds(96, barY + 5, 200, 18);
-        progressSlider.setBounds(300, barY + 4, W - 310, 20);
+        previousBtn.setBounds(54, barY + 3, 22, 22);
+        nextBtn.setBounds(78, barY + 3, 22, 22);
+        ejectBtn.setBounds(104, barY + 3, 36, 22);
+        analyseAlbumBtn.setBounds(146, barY + 3, 88, 22);
+        fileNameLabel.setBounds(240, barY + 5, 160, 18);
+        progressSlider.setBounds(404, barY + 4, W - 414, 20);
     }
 }
 
@@ -323,7 +486,9 @@ bool TidelineAudioProcessorEditor::isInterestedInFileDrag(const juce::StringArra
 {
     for (const auto& f : files)
     {
-        juce::String ext = juce::File(f).getFileExtension().toLowerCase();
+        juce::File file(f);
+        if (file.isDirectory()) return true;
+        juce::String ext = file.getFileExtension().toLowerCase();
         if (ext == ".wav" || ext == ".aiff" || ext == ".aif" || ext == ".mp3"
             || ext == ".flac" || ext == ".ogg" || ext == ".m4a" || ext == ".aac")
             return true;
@@ -347,17 +512,14 @@ void TidelineAudioProcessorEditor::filesDropped(const juce::StringArray& files, 
 {
     fileDragOver = false;
 
-    for (const auto& f : files)
+    juce::Array<juce::File> dropped;
+    for (const auto& f : files) dropped.add(juce::File(f));
+    if (processor.filePlayer.loadFiles(dropped))
     {
-        juce::File file(f);
-        if (processor.filePlayer.loadFile(file))
-        {
-            processor.requestReset();
-            processor.filePlayer.play();
-            resized(); // re-layout to show the file transport bar
-            repaint();
-            break;
-        }
+        processor.requestReset();
+        processor.filePlayer.play();
+        resized();
+        repaint();
     }
 }
 
@@ -365,6 +527,7 @@ void TidelineAudioProcessorEditor::updateModeButtons()
 {
     streamingBtn.setToggleState(!vinylMode, juce::dontSendNotification);
     vinylBtn.setToggleState(vinylMode, juce::dontSendNotification);
+    dial.setVisible(vinylMode);
     resized();
     repaint();
 }

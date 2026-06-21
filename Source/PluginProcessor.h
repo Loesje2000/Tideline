@@ -44,6 +44,10 @@ public:
     // Crest factor (derived from peak + smoothed RMS)
     float getCrestFactorDB() const;
 
+    // Returns the playback gain a service would apply for the current programme.
+    // A negative result is a loudness penalty; a positive result is a permitted boost.
+    float getPlatformGainDB (int platformIndex) const;
+
     void requestReset() { resetRequested.store(true, std::memory_order_relaxed); }
 
 private:
@@ -55,6 +59,13 @@ private:
 
     // Preview gain
     float previewGainSmoothed = 1.0f;
+    float previewGainDB       = 0.0f;
+    bool  previewWasEnabled   = false;
+    int   previewPlatform     = -1;
+
+    float calculatePlatformGainDB (int platformIndex, float integratedLUFS,
+                                   float truePeakDB) const;
+    void refreshPreviewGain (int platformIndex);
 
     void applyPreviewGain(juce::AudioBuffer<float>& buffer);
 
