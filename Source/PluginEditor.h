@@ -64,5 +64,7 @@ private:
     void updateModeButtons();
     void updateFileTransportUI();
 
+    juce::TooltipWindow tooltipWindow { this, 600 };
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TidelineAudioProcessorEditor)
 };

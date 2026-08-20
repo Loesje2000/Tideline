@@ -9,6 +9,7 @@ TidelineAudioProcessorEditor::TidelineAudioProcessorEditor(TidelineAudioProcesso
     setResizeLimits(560, 360, 1100, 700);
 
     // Dial
+    dial.setTooltip("Loudness dial: needle shows momentary/integrated LUFS against the selected streaming-platform target. Click a tick to change the target.");
     addAndMakeVisible(dial);
     dial.onTickSelected = [this](int idx)
     {
@@ -17,6 +18,8 @@ TidelineAudioProcessorEditor::TidelineAudioProcessorEditor(TidelineAudioProcesso
     };
 
     // Mode buttons
+    streamingBtn.setTooltip("Streaming mode: reference the mix's LUFS against streaming-platform loudness targets.");
+    vinylBtn.setTooltip("Vinyl mode: check mono-bass compatibility, crest factor, and cutting-readiness for a vinyl pressing.");
     addAndMakeVisible(streamingBtn);
     addAndMakeVisible(vinylBtn);
     streamingBtn.setClickingTogglesState(false);
@@ -41,15 +44,18 @@ TidelineAudioProcessorEditor::TidelineAudioProcessorEditor(TidelineAudioProcesso
     };
 
     // Preview / Reset
+    previewBtn.setTooltip("Preview: applies the gain trim the selected platform's loudness normalization would apply, so you hear the mix at its actual streamed level.");
     addAndMakeVisible(previewBtn);
     previewBtn.setClickingTogglesState(true);
     previewAttach = std::make_unique<APVTS::ButtonAttachment>(
         processor.apvts, "preview", previewBtn);
 
+    resetBtn.setTooltip("Reset: clears the integrated loudness measurement and starts a fresh reading.");
     addAndMakeVisible(resetBtn);
     resetBtn.onClick = [this] { processor.requestReset(); };
 
     // File transport — play/stop
+    playStopBtn.setTooltip("Play/Stop the loaded reference file.");
     addAndMakeVisible(playStopBtn);
     playStopBtn.onClick = [this]
     {
@@ -63,21 +69,25 @@ TidelineAudioProcessorEditor::TidelineAudioProcessorEditor(TidelineAudioProcesso
         }
     };
 
+    previousBtn.setTooltip("Previous file in the loaded playlist/album.");
     addAndMakeVisible(previousBtn);
     previousBtn.onClick = [this]
     {
         if (processor.filePlayer.previousFile()) { processor.requestReset(); processor.filePlayer.play(); }
     };
+    nextBtn.setTooltip("Next file in the loaded playlist/album.");
     addAndMakeVisible(nextBtn);
     nextBtn.onClick = [this]
     {
         if (processor.filePlayer.nextFile()) { processor.requestReset(); processor.filePlayer.play(); }
     };
 
+    analyseAlbumBtn.setTooltip("Analyse every file in the loaded album for loudness, without needing to play through each one.");
     addAndMakeVisible(analyseAlbumBtn);
     analyseAlbumBtn.onClick = [this] { processor.filePlayer.analyseAlbumAsync(); };
 
     // Eject
+    ejectBtn.setTooltip("Eject: stops playback and clears the loaded reference file.");
     addAndMakeVisible(ejectBtn);
     ejectBtn.onClick = [this]
     {
@@ -95,6 +105,7 @@ TidelineAudioProcessorEditor::TidelineAudioProcessorEditor(TidelineAudioProcesso
     fileNameLabel.setJustificationType(juce::Justification::centredLeft);
 
     // Progress slider (scrubber)
+    progressSlider.setTooltip("Playback position in the loaded reference file.");
     addAndMakeVisible(progressSlider);
     progressSlider.setSliderStyle(juce::Slider::LinearHorizontal);
     progressSlider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
@@ -110,6 +121,7 @@ TidelineAudioProcessorEditor::TidelineAudioProcessorEditor(TidelineAudioProcesso
     };
 
     // Vinyl panel
+    vinylPanel.setTooltip("Vinyl readout: mono-bass gauge, crest factor, and a cutting-readiness verdict for the current material.");
     addAndMakeVisible(vinylPanel);
     vinylPanel.setVisible(false);
 

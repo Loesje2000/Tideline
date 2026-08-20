@@ -4,7 +4,8 @@
 #include "../DSP/VinylVerdict.h"
 
 // Vinyl mode panel: mono-bass gauge, crest factor readout, verdict text.
-class VinylPanel : public juce::Component
+class VinylPanel : public juce::Component,
+                    public juce::SettableTooltipClient
 {
 public:
     VinylPanel() = default;

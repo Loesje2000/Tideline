@@ -14,7 +14,8 @@ struct PlatformTarget
 };
 
 class TideDial : public juce::Component,
-                 public juce::Timer
+                 public juce::Timer,
+                 public juce::SettableTooltipClient
 {
 public:
     TideDial();
